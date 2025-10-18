@@ -2,7 +2,7 @@
 
 Personal project implementing a cross-chain rebase token protocol with Chainlink CCIP.
 
-Started: October 2024  
+Started: October 2025
 Target completion: 10-12 days
 
 Note: This is my first structured GitHub project. Previously I learned and coded without proper version control or documentation. Using this project to build professional development habits.
@@ -206,11 +206,7 @@ Add more as development progresses.
 
 ## Blockers & Solutions
 
-When stuck:
-1. Review course material
-2. Check Foundry documentation
-3. Ask in Cyfrin Discord
-4. Take 15 minute break and return
+
 
 Common issues:
 - Compilation errors: Check import paths
