@@ -88,6 +88,10 @@ contract Vault {
         if (_amount == type(uint256).max) {
             _amount = i_rebaseToken.balanceOf(msg.sender);
         }
+        // to prevent accidentally call `redeem(0)` which would execute CEI
+        if (_amount == 0) {
+        revert Vault__RedeemAmountZero();
+    }
         
         // Burn tokens first (CEI pattern - Effects before Interactions)
         i_rebaseToken.burn(msg.sender, _amount);
