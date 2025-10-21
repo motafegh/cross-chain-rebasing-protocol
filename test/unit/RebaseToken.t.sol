@@ -17,10 +17,10 @@ import {RebaseToken} from "../../src/RebaseToken.sol";
  */
 contract RebaseTokenTest is Test {
     RebaseToken public token;
-    
+
     // Test addresses
     address public owner = makeAddr("owner");
-    address public user = makeAddr("user"); 
+    address public user = makeAddr("user");
     address public vault = makeAddr("vault");
     address public userTwo = makeAddr("userTwo");
 
@@ -32,22 +32,21 @@ contract RebaseTokenTest is Test {
         // Deploy token as owner
         vm.prank(owner);
         token = new RebaseToken();
-        
+
         // Grant vault the MINT_AND_BURN_ROLE
         vm.prank(owner);
         token.grantMintAndBurnRole(vault);
 
         // Verify role was granted correctly
         assertTrue(
-            token.hasRole(keccak256("MINT_AND_BURN_ROLE"), vault), 
-            "Vault should have MINT_AND_BURN_ROLE after setUp"
+            token.hasRole(keccak256("MINT_AND_BURN_ROLE"), vault), "Vault should have MINT_AND_BURN_ROLE after setUp"
         );
     }
 
     /*//////////////////////////////////////////////////////////////    
                             INITIAL STATE
     //////////////////////////////////////////////////////////////*/
-    
+
     /**
      * @notice Verify contract initializes with correct state
      * @dev Checks initial rate (5e10) and owner address
@@ -69,11 +68,11 @@ contract RebaseTokenTest is Test {
         // Owner grants role to user
         vm.prank(owner);
         token.grantMintAndBurnRole(user);
-        
+
         // User should now be able to mint
         vm.prank(user);
         token.mint(user, AMOUNT, INITIAL_RATE);
-        
+
         assertEq(token.balanceOf(user), AMOUNT, "User should receive minted tokens");
     }
 
@@ -108,7 +107,7 @@ contract RebaseTokenTest is Test {
     function test_Mint() public {
         vm.prank(vault);
         token.mint(user, AMOUNT, INITIAL_RATE);
-        
+
         assertEq(token.principalBalanceOf(user), AMOUNT, "Principal should equal minted amount");
         assertEq(token.getUserInterestRate(user), INITIAL_RATE, "User rate should be set");
     }
@@ -151,11 +150,7 @@ contract RebaseTokenTest is Test {
         token.mint(user, 100e18, currentRate);
 
         // User should KEEP their original high rate (not downgrade to 2e10)
-        assertEq(
-            token.getUserInterestRate(user), 
-            INITIAL_RATE, 
-            "Rate should not downgrade from 5e10 to 2e10"
-        );
+        assertEq(token.getUserInterestRate(user), INITIAL_RATE, "Rate should not downgrade from 5e10 to 2e10");
     }
 
     /**
@@ -166,17 +161,13 @@ contract RebaseTokenTest is Test {
         // User starts with 5e10 rate
         vm.prank(vault);
         token.mint(user, AMOUNT, 5e10);
-        
+
         // Mint at higher 10e10 rate
         vm.prank(vault);
         token.mint(user, 100e18, 10e10);
-        
+
         // Rate should upgrade
-        assertEq(
-            token.getUserInterestRate(user), 
-            10e10, 
-            "Rate should upgrade to higher rate"
-        );
+        assertEq(token.getUserInterestRate(user), 10e10, "Rate should upgrade to higher rate");
     }
 
     /**
@@ -189,7 +180,7 @@ contract RebaseTokenTest is Test {
         vm.prank(vault);
         token.mint(user, AMOUNT, INITIAL_RATE);
         uint256 userOriginalBalance = token.principalBalanceOf(user);
-        
+
         // Advance time to accrue interest
         vm.warp(block.timestamp + 3600); // 1 hour
 
@@ -197,11 +188,7 @@ contract RebaseTokenTest is Test {
         uint256 newBalance = token.balanceOf(user);
         console.log("User balance after 1 hour:", newBalance);
 
-        assertGt(
-            newBalance, 
-            userOriginalBalance, 
-            "Balance should include accrued interest"
-        );
+        assertGt(newBalance, userOriginalBalance, "Balance should include accrued interest");
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -246,16 +233,8 @@ contract RebaseTokenTest is Test {
         uint256 remainingBalance = token.balanceOf(user);
         console.log("Remaining balance after burn:", remainingBalance);
 
-        assertLt(
-            remainingBalance, 
-            balanceWithInterest, 
-            "Balance should decrease after burn"
-        );
-        assertGt(
-            remainingBalance, 
-            0, 
-            "Interest should remain after burning principal"
-        );
+        assertLt(remainingBalance, balanceWithInterest, "Balance should decrease after burn");
+        assertGt(remainingBalance, 0, "Interest should remain after burning principal");
     }
 
     /**
@@ -275,7 +254,7 @@ contract RebaseTokenTest is Test {
     /*//////////////////////////////////////////////////////////////
                         BALANCE CALCULATIONS
     //////////////////////////////////////////////////////////////*/
-    
+
     /**
      * @notice Verify balanceOf includes accrued interest
      * @dev balanceOf is a view function that calculates interest on-demand
@@ -291,11 +270,7 @@ contract RebaseTokenTest is Test {
         uint256 balanceWithInterest = token.balanceOf(user);
         console.log("Balance with interest after 1 hour:", balanceWithInterest);
 
-        assertGt(
-            balanceWithInterest, 
-            AMOUNT, 
-            "Balance should include accrued interest"
-        );
+        assertGt(balanceWithInterest, AMOUNT, "Balance should include accrued interest");
     }
 
     /**
@@ -322,9 +297,9 @@ contract RebaseTokenTest is Test {
     function test_InterestAccrualIsLinear() public {
         vm.prank(vault);
         token.mint(user, AMOUNT, INITIAL_RATE);
-        
+
         uint256 startTime = block.timestamp;
-        
+
         // First 30 minutes
         vm.warp(startTime + 1800);
         uint256 balanceAfter30Min = token.balanceOf(user);
@@ -337,21 +312,16 @@ contract RebaseTokenTest is Test {
 
         console.log("Interest after first 30 min:", interest30Min);
         console.log("Interest after second 30 min:", interest60Min);
-        
+
         // Both periods should yield approximately equal interest (linear growth)
         // Small tolerance for integer rounding
-        assertApproxEqAbs(
-            interest30Min, 
-            interest60Min, 
-            1e10, 
-            "Interest should accrue linearly"
-        );
+        assertApproxEqAbs(interest30Min, interest60Min, 1e10, "Interest should accrue linearly");
     }
 
     /*//////////////////////////////////////////////////////////////
                         TRANSFER FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-    
+
     /**
      * @notice Test basic transfer functionality
      * @dev Verifies tokens move between users and rates are inherited
@@ -366,13 +336,9 @@ contract RebaseTokenTest is Test {
 
         assertEq(token.balanceOf(userTwo), AMOUNT / 2, "UserTwo should receive tokens");
         assertEq(token.balanceOf(user), AMOUNT / 2, "User should have remaining tokens");
-        
+
         // UserTwo should inherit sender's rate (since userTwo had 0 balance)
-        assertEq(
-            token.getUserInterestRate(userTwo), 
-            INITIAL_RATE, 
-            "UserTwo should inherit sender's rate"
-        );
+        assertEq(token.getUserInterestRate(userTwo), INITIAL_RATE, "UserTwo should inherit sender's rate");
     }
 
     /**
@@ -393,11 +359,7 @@ contract RebaseTokenTest is Test {
 
         assertEq(token.balanceOf(userTwo), AMOUNT / 2, "UserTwo should receive tokens");
         assertEq(token.balanceOf(user), AMOUNT / 2, "User should have remaining tokens");
-        assertEq(
-            token.getUserInterestRate(userTwo), 
-            INITIAL_RATE, 
-            "UserTwo should inherit rate"
-        );
+        assertEq(token.getUserInterestRate(userTwo), INITIAL_RATE, "UserTwo should inherit rate");
     }
 
     /**
@@ -420,21 +382,17 @@ contract RebaseTokenTest is Test {
 
         // UserTwo should KEEP their higher rate (not downgrade to user's rate)
         assertEq(
-            token.getUserInterestRate(userTwo), 
+            token.getUserInterestRate(userTwo),
             INITIAL_RATE + 1e10,
             "Recipient's existing rate should not be overwritten"
         );
-        assertEq(
-            token.getUserInterestRate(user), 
-            INITIAL_RATE,
-            "Sender's rate should remain unchanged"
-        );
+        assertEq(token.getUserInterestRate(user), INITIAL_RATE, "Sender's rate should remain unchanged");
     }
 
     /*//////////////////////////////////////////////////////////////
                         SET INTEREST RATE
     //////////////////////////////////////////////////////////////*/
-    
+
     /**
      * @notice Test setting global interest rate
      * @dev Only owner can decrease rate
@@ -442,7 +400,7 @@ contract RebaseTokenTest is Test {
     function test_SetInterestRate() public {
         vm.prank(owner);
         token.setInterestRate(2e10); // Lower than initial 5e10
-        
+
         assertEq(token.getInterestRate(), 2e10, "Global rate should update");
     }
 
@@ -464,11 +422,7 @@ contract RebaseTokenTest is Test {
     function test_SetInterestRateRevertsIfHigher() public {
         vm.prank(owner);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                RebaseToken.RebaseToken__InterestRateCanOnlyDecrease.selector,
-                INITIAL_RATE,
-                6e10
-            )
+            abi.encodeWithSelector(RebaseToken.RebaseToken__InterestRateCanOnlyDecrease.selector, INITIAL_RATE, 6e10)
         );
         token.setInterestRate(6e10); // Higher than current 5e10
     }
@@ -493,16 +447,8 @@ contract RebaseTokenTest is Test {
         token.mint(userTwo, AMOUNT, currentRate);
 
         // User keeps old high rate, userTwo gets new low rate
-        assertEq(
-            token.getUserInterestRate(user), 
-            INITIAL_RATE, 
-            "Old user keeps original high rate"
-        );
-        assertEq(
-            token.getUserInterestRate(userTwo), 
-            2e10, 
-            "New user gets current lower rate"
-        );
+        assertEq(token.getUserInterestRate(user), INITIAL_RATE, "Old user keeps original high rate");
+        assertEq(token.getUserInterestRate(userTwo), 2e10, "New user gets current lower rate");
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -537,10 +483,7 @@ contract RebaseTokenTest is Test {
      * @param amount Random principal amount
      * @param timeElapsed Random time period
      */
-    function testFuzz_InterestAccrual(
-        uint256 amount,
-        uint256 timeElapsed
-    ) public {
+    function testFuzz_InterestAccrual(uint256 amount, uint256 timeElapsed) public {
         // Bound amount: 1 token to 1 billion tokens
         amount = bound(amount, 1e18, 1e27);
 
@@ -566,11 +509,6 @@ contract RebaseTokenTest is Test {
         uint256 expectedBalance = amount + expectedInterest;
 
         // Allow 1 wei tolerance for rounding errors
-        assertApproxEqAbs(
-            balanceAfter, 
-            expectedBalance, 
-            1,
-            "Balance should match linear interest formula"
-        );
+        assertApproxEqAbs(balanceAfter, expectedBalance, 1, "Balance should match linear interest formula");
     }
 }
