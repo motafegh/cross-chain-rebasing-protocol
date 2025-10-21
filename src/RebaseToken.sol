@@ -40,6 +40,7 @@ contract RebaseToken is ERC20, Ownable, AccessControl {
     //////////////////////////////////////////////////////////////*/
     
     event InterestRateSet(uint256 newInterestRate);
+    event InterestMinted(address indexed user, uint256 amount);
     
     /*//////////////////////////////////////////////////////////////
                               CONSTRUCTOR
@@ -235,6 +236,8 @@ contract RebaseToken is ERC20, Ownable, AccessControl {
         
         // Mint the interest (making it "real")
         _mint(_user, balanceIncrease);
+        // Emit an event for the minted interest
+        emit InterestMinted(_user, balanceIncrease);
         
         // Reset the clock for next interest calculation
         s_userLastUpdatedTimestamp[_user] = block.timestamp;
