@@ -132,28 +132,25 @@ contract RebaseToken is ERC20, Ownable, AccessControl {
      * @return success Whether transfer succeeded
      * @dev Mints interest for both parties and may update recipient's rate
      */
-    function transfer(address _recipient, uint256 _amount) 
-        public 
-        override 
-        returns (bool) 
-    {
-        // Allow sending full balance with max uint
-        if (_amount == type(uint256).max) {
-            _amount = balanceOf(msg.sender);
-        }
-        
-        // Mint interest for both sender and recipient
+   
+    //Optimize gas cost 
+    function transfer(address _recipient, uint256 _amount) public override returns (bool) {
+        // Mint interest FIRST
         _mintAccruedInterest(msg.sender);
         _mintAccruedInterest(_recipient);
         
-        // If recipient has no tokens, inherit sender's rate
-        // This prevents griefing (can't force lower rate on someone with existing balance)
-        if (balanceOf(_recipient) == 0) {
+        // Then use super.balanceOf (no calculation needed)
+        if (_amount == type(uint256).max) {
+            _amount = super.balanceOf(msg.sender);
+        }
+        
+        if (super.balanceOf(_recipient) == 0) {
             s_userInterestRate[_recipient] = s_userInterestRate[msg.sender];
         }
         
         return super.transfer(_recipient, _amount);
     }
+
     
     /**
      * @notice Transfer tokens from one address to another
@@ -164,23 +161,25 @@ contract RebaseToken is ERC20, Ownable, AccessControl {
      * @dev Same logic as transfer but with approval mechanism
      */
     function transferFrom(address _sender, address _recipient, uint256 _amount)
-        public
-        override
-        returns (bool)
+    public
+    override
+    returns (bool)
     {
-        if (_amount == type(uint256).max) {
-            _amount = balanceOf(_sender);
-        }
-        
         _mintAccruedInterest(_sender);
         _mintAccruedInterest(_recipient);
-        
-        if (balanceOf(_recipient) == 0) {
+
+        uint256 requestedAmount = _amount;      // keep original value
+        if (_amount == type(uint256).max) {
+            _amount = super.balanceOf(_sender); // actual tokens to move
+        }
+
+        if (super.balanceOf(_recipient) == 0) {
             s_userInterestRate[_recipient] = s_userInterestRate[_sender];
         }
-        
-        return super.transferFrom(_sender, _recipient, _amount);
-    }
+
+        // super.transferFrom will transfer `_amount` but decrement allowance by `requestedAmount`
+        return super.transferFrom(_sender, _recipient, requestedAmount);
+}
     
     /*//////////////////////////////////////////////////////////////
                           INTERNAL HELPERS
