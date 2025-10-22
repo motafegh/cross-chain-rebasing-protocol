@@ -219,7 +219,148 @@ For testnet: I manually fund it with extra ETH.
 
 ---
 
+---
+
 ### 3. RebaseTokenPool.sol (on both chains)
+
+**What it does:** Custom CCIP token pool that preserves user interest rates during
+cross-chain bridging.
+
+**Why custom?** Standard CCIP pools only transfer token amounts. We need to transfer:
+1. Token amount
+2. User's interest rate ← This requires custom logic
+
+**CCIP Integration:**
+
+CCIP uses a "Burn & Mint" pattern:
+- Source chain: Burn tokens and encode data
+- Destination chain: Decode data and mint tokens
+
+But there's a twist in how tokens get to the pool...
+
+**The Router Transfer Pattern:**
+```
+User initiates bridge:
+┌─────────────┐
+│    User     │ 1. Approves Router for tokens
+└──────┬──────┘ 2. Calls router.ccipSend()
+       │
+       ▼
+┌─────────────────┐
+│  CCIP Router    │ 3. Transfers tokens: user → pool
+└──────┬──────────┘    (using standard ERC20 transferFrom)
+       │
+       ▼              4. Calls pool.lockOrBurn()
+┌─────────────────┐
+│ RebaseTokenPool │ 5. Burns from pool's own balance
+└─────────────────┘ 6. Returns encoded rate
+       │
+       │ CCIP Message (~15 min)
+       ▼
+┌─────────────────┐
+│ Destination     │ 7. Calls pool.releaseOrMint()
+│ Pool            │ 8. Decodes rate, mints tokens
+└─────────────────┘
+```
+
+**Critical implementation detail:**
+
+The pool burns from `address(this)` (its own balance), NOT from the user's address.
+
+**Why?** The CCIP router already transferred tokens to the pool before calling
+`lockOrBurn`. This is the standard CCIP pattern - it ensures tokens are in the
+pool's custody before any burning happens.
+```solidity
+// Inside lockOrBurn():
+
+// STEP 1: Get user's rate BEFORE burning
+uint256 userRate = token.getUserInterestRate(originalSender);
+
+// STEP 2: Burn from pool's balance (not from user!)
+// Router already did: token.transferFrom(user, pool, amount)
+token.burn(address(this), amount);
+
+// STEP 3: Encode rate for CCIP message
+return LockOrBurnOutV1({
+    destTokenAddress: remoteTokenAddress,
+    destPoolData: abi.encode(userRate)  // ← Custom data!
+});
+```
+
+**On the destination chain:**
+```solidity
+// Inside releaseOrMint():
+
+// STEP 1: Get receiver address
+address receiver = releaseOrMintIn.receiver;
+
+// STEP 2: Decode rate from source chain
+(uint256 userRate) = abi.decode(sourcePoolData, (uint256));
+
+// STEP 3: Mint with preserved rate
+// mint() function handles rate logic:
+// - If receiver has 0 balance: set to userRate
+// - If receiver has balance and userRate > current: upgrade
+// - If receiver has balance and userRate < current: keep current
+token.mint(receiver, amount, userRate);
+```
+
+**Why encode the rate?**
+
+Without encoding:
+- User bridges from Sepolia (10% rate) to Arbitrum
+- Arbitrum only knows the token amount
+- User would get minted at Arbitrum's current global rate (5%)
+- Lost their high rate! ❌
+
+With encoding:
+- User bridges with their 10% rate
+- Pool encodes it in `destPoolData`
+- Arbitrum pool decodes it
+- User keeps their 10% rate ✅
+
+**Security considerations:**
+
+1. **Source pool validation:** The `_validateReleaseOrMint` function checks that
+   messages come from our registered source pool. This prevents fake pools from
+   minting unlimited tokens.
+
+2. **Rate limits:** CCIP enforces rate limits to prevent drain attacks. We configure
+   these during pool setup.
+
+3. **Allowlist:** Can restrict who can bridge (we use empty list = public).
+
+**CCIP v1.5 Compatibility:**
+
+We use the latest CCIP version (1.5), which differs from the course materials:
+- Constructor takes 4 arguments instead of 5 (decimals removed)
+- `receiver` field is `address` type (not `bytes`)
+- Same security model and validation
+
+**Gas considerations:**
+
+Bridging costs:
+- CCIP relay fees (paid in LINK): ~$0.50-2.00
+- Source chain gas: ~150k gas (~$3-5 on mainnet)
+- Destination chain gas: ~120k gas (~$2-4 on mainnet)
+
+The extra cost of encoding the rate is negligible (~200 gas).
+
+**Interest during bridging:**
+
+Users earn NO interest during the ~15 minute bridge time:
+- Source: tokens burned (balance = 0)
+- Destination: tokens not yet minted
+
+At 10% APY:
+- 1000 tokens
+- 15 minutes = 0.0000285 years
+- Lost interest: 0.00285 tokens (~$0.003)
+
+The CCIP relay fee ($0.50-2.00) is 100-1000x larger than lost interest.
+This is an acceptable trade-off for cross-chain security.
+
+---
 
 **What it does:** Custom CCIP pool that preserves user interest rates during
 bridging.
