@@ -86,17 +86,16 @@ contract DeployLocal is Script {
         //////////////////////////////////////////////////////////////*/
 
         // Empty allowlist = public pool (anyone can bridge)
-        // For production, you might restrict to specific addresses
+        // For production,  might restrict to specific addresses
         address[] memory allowlist = new address[](0);
 
         RebaseTokenPool poolContract = new RebaseTokenPool(
-            IERC20(address(tokenContract)),
+            IERC20(address(tokenContract)), // our token
             allowlist, // Public bridging
             cfg.rmnProxy, // Security layer
             cfg.router // CCIP routing
         );
         console.log("[2/4] RebaseTokenPool deployed:", address(poolContract));
-
         /*//////////////////////////////////////////////////////////////
                         STEP 3: GRANT POOL PERMISSIONS
         //////////////////////////////////////////////////////////////*/
