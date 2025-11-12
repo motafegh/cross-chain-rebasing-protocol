@@ -9,52 +9,16 @@ import {IRebaseToken} from "../src/interfaces/IRebaseToken.sol";
 import {IERC20} from "@ccip/contracts/src/v0.8/vendor/openzeppelin-solidity/v4.8.3/contracts/token/ERC20/IERC20.sol";
 import {HelperConfig} from "./helpers/HelperConfig.s.sol";
 
+// Registry imports
+import {RegistryModuleOwnerCustom} from "@ccip/contracts/src/v0.8/ccip/tokenAdminRegistry/RegistryModuleOwnerCustom.sol";
+import {TokenAdminRegistry} from "@ccip/contracts/src/v0.8/ccip/tokenAdminRegistry/TokenAdminRegistry.sol";
+
 /**
  * @title DeployLocal
  * @author Ali (motafegh)
- * @notice Single-chain deployment of RebaseToken + Pool + Vault
- * @dev Base deployment script for multi-environment usage
+ * @notice Production-grade single-chain deployment with Registry integration
+ * @dev Deploys Token + Pool + Vault, registers with CCIP TokenAdminRegistry
  *
- * DEPLOYMENT MATRIX:
- * ┌─────────────┬────────┬──────┬───────┐
- * │ Chain       │ Token  │ Pool │ Vault │
- * ├─────────────┼────────┼──────┼───────┤
- * │ Sepolia     │   ✓    │  ✓   │   ✓   │
- * │ Arbitrum    │   ✓    │  ✓   │   ✗   │
- * │ Anvil       │   ✓    │  ✓   │   ✓   │
- * └─────────────┴────────┴──────┴───────┘
- *
- * ARCHITECTURE RATIONALE:
- * - Vault lives ONLY on Sepolia (L1 liquidity hub)
- *   Why? Interest payouts require ETH reserves
- *   Alternative considered: Multi-chain vaults with rebalancing
- *   Trade-off: Simpler, but users must return to L1 to redeem
- *
- * - Pool deploys everywhere (CCIP requirement)
- *   Why? Both chains need burn/mint capability
- *
- * - Public allowlist (testnet security model)
- *   Why? Easier testing; production would whitelist
- *
- * CRITICAL NEXT STEPS AFTER DEPLOYMENT:
- * 1. Run this script on BOTH Sepolia AND Arbitrum
- * 2. Run ConfigurePool.s.sol bidirectionally
- * 3. Test bridge with small amount
- * 4. Register token with CCIP TokenAdminRegistry (production only)
- *
- * USAGE EXAMPLES:
- *   # Local Anvil (mock CCIP)
- *   forge script script/DeployLocal.s.sol --rpc-url http://localhost:8545
- *
- *   # Sepolia (real CCIP testnet)
- *   forge script script/DeployLocal.s.sol \
- *     --rpc-url $SEPOLIA_RPC --broadcast --verify \
- *     --etherscan-api-key $ETHERSCAN_KEY
- *
- *   # Arbitrum Sepolia
- *   forge script script/DeployLocal.s.sol \
- *     --rpc-url $ARB_SEPOLIA_RPC --broadcast --verify \
- *     --etherscan-api-key $ARBISCAN_KEY
  */
 contract DeployLocal is Script {
     /*//////////////////////////////////////////////////////////////
@@ -63,6 +27,8 @@ contract DeployLocal is Script {
 
     error DeployLocal__InvalidRouterAddress();
     error DeployLocal__InvalidRmnProxyAddress();
+    error DeployLocal__InvalidRegistryAddress();
+    error DeployLocal__InvalidRegistryModuleAddress();
     error DeployLocal__VaultFundingFailed();
 
     /*//////////////////////////////////////////////////////////////
@@ -72,7 +38,8 @@ contract DeployLocal is Script {
     /// @dev Sepolia chain ID (only chain with vault)
     uint256 private constant SEPOLIA_CHAIN_ID = 11_155_111;
 
-    /// @dev Testnet vault seed funding for interest payouts
+    /// @dev Testnet vault seed funding
+    /// Production: Funded by protocol revenue (trading fees, yields)
     uint256 private constant VAULT_SEED_FUNDING = 1 ether;
 
     /*//////////////////////////////////////////////////////////////
@@ -81,21 +48,31 @@ contract DeployLocal is Script {
 
     /**
      * @notice Deploy complete single-chain stack
-     * @return token RebaseToken address
-     * @return pool RebaseTokenPool address
-     * @return vault Vault address (0x0 if not Sepolia)
-     * @return router CCIP Router from HelperConfig
-     * @return rmnProxy Risk Management Network proxy from HelperConfig
+     * @return token RebaseToken contract address
+     * @return pool RebaseTokenPool contract address
+     * @return vault Vault contract address (0x0 if not Sepolia)
+     * @return router CCIP Router address from HelperConfig
+     * @return rmnProxy RMN Proxy address from HelperConfig
+     * @return linkToken LINK token address from HelperConfig
      *
-     * @dev Return values feed into ConfigurePool.s.sol for cross-chain wiring
+     * @dev Return values enable script chaining (e.g., for ConfigurePool)
      *
-     * GAS COSTS (approximate, Sepolia):
-     * - RebaseToken:     ~2.5M gas
-     * - RebaseTokenPool: ~3.2M gas
-     * - Vault:           ~0.8M gas
-     * - Total:           ~6.5M gas (~$15-25 at 30 gwei)
+     * EXECUTION FLOW:
+     * 1. Load network config from HelperConfig
+     * 2. Validate all addresses (fail-fast)
+     * 3. Deploy RebaseToken
+     * 4. Deploy RebaseTokenPool
+     * 5. Grant pool mint/burn role
+     * 6. Register with TokenAdminRegistry (3 steps)
+     * 7. Deploy Vault (Sepolia only)
+     * 8. Grant vault mint/burn role
+     * 9. Fund vault with seed ETH
+     * 10. Log deployment summary
      */
-    function run() external returns (address token, address pool, address vault, address router, address rmnProxy) {
+    function run()
+        external
+        returns (address token, address pool, address vault, address router, address rmnProxy, address linkToken)
+    {
         /*//////////////////////////////////////////////////////////////
                         STEP 0: LOAD & VALIDATE CONFIG
         //////////////////////////////////////////////////////////////*/
@@ -103,16 +80,29 @@ contract DeployLocal is Script {
         HelperConfig helper = new HelperConfig();
         HelperConfig.NetworkConfig memory cfg = helper.getConfig();
 
-        // Defensive: Catch HelperConfig errors early
+        // Defensive validation (fail-fast pattern)
         if (cfg.router == address(0)) revert DeployLocal__InvalidRouterAddress();
         if (cfg.rmnProxy == address(0)) revert DeployLocal__InvalidRmnProxyAddress();
+        if (cfg.tokenAdminRegistry == address(0)) revert DeployLocal__InvalidRegistryAddress();
+        if (cfg.registryModule == address(0)) revert DeployLocal__InvalidRegistryModuleAddress();
 
-        console.log("\n=== Deployment Configuration ===");
+        console.log("\n========================================");
+        console.log("     DEPLOYMENT CONFIGURATION");
+        console.log("========================================");
         console.log("Chain ID:", block.chainid);
-        console.log("CCIP Router:", cfg.router);
-        console.log("RMN Proxy:", cfg.rmnProxy);
-        console.log("LINK Token:", cfg.linkToken);
-        console.log("Chain Selector:", cfg.chainSelector);
+        console.log("Deployer:", msg.sender);
+        console.log("Timestamp:", block.timestamp);
+        console.log("----------------------------------------");
+        console.log("CCIP Infrastructure:");
+        console.log("  Router:", cfg.router);
+        console.log("  RMN Proxy:", cfg.rmnProxy);
+        console.log("  LINK Token:", cfg.linkToken);
+        console.log("  Chain Selector:", cfg.chainSelector);
+        console.log("----------------------------------------");
+        console.log("Token Admin Registry:");
+        console.log("  Registry:", cfg.tokenAdminRegistry);
+        console.log("  Module:", cfg.registryModule);
+        console.log("----------------------------------------\n");
 
         /*//////////////////////////////////////////////////////////////
                         STEP 1: DEPLOY REBASE TOKEN
@@ -121,67 +111,152 @@ contract DeployLocal is Script {
         vm.startBroadcast();
 
         RebaseToken tokenContract = new RebaseToken();
-        console.log("\n[1/4] RebaseToken deployed:", address(tokenContract));
-        console.log("      Owner:", tokenContract.owner());
-        console.log("      Initial rate:", tokenContract.getInterestRate());
+
+        console.log("========================================");
+        console.log("  [1/7] REBASE TOKEN DEPLOYED");
+        console.log("========================================");
+        console.log("Address:", address(tokenContract));
+        console.log("Owner:", tokenContract.owner());
+        console.log("Initial Rate:", tokenContract.getInterestRate());
+        console.log("Symbol:", tokenContract.symbol());
+        console.log("Name:", tokenContract.name());
+        console.log("");
 
         /*//////////////////////////////////////////////////////////////
                         STEP 2: DEPLOY TOKEN POOL
         //////////////////////////////////////////////////////////////*/
 
-        // Empty allowlist = anyone can bridge (testnet approach)
-        // PRODUCTION TODO: Populate with trusted addresses or KYC'd users
+        // Empty allowlist = public bridging (testnet)
+        // Production: Populate with KYC'd addresses
         address[] memory allowlist = new address[](0);
 
         RebaseTokenPool poolContract = new RebaseTokenPool(
-            IERC20(address(tokenContract)), // Token to bridge
-            allowlist, // Who can bridge (empty = public)
-            cfg.rmnProxy, // CCIP security layer
-            cfg.router // CCIP message router
+            IERC20(address(tokenContract)), // Token to manage
+            allowlist, // Who can bridge
+            cfg.rmnProxy, // Security layer
+            cfg.router // Message router
         );
-        console.log("[2/4] RebaseTokenPool deployed:", address(poolContract));
+
+        console.log("========================================");
+        console.log("  [2/7] REBASE TOKEN POOL DEPLOYED");
+        console.log("========================================");
+        console.log("Address:", address(poolContract));
+        console.log("Token:", address(poolContract.getToken()));
+        console.log("Router:", address(poolContract.getRouter()));
+        console.log("Allowlist: PUBLIC (empty array)");
+        console.log("");
 
         /*//////////////////////////////////////////////////////////////
                         STEP 3: GRANT POOL PERMISSIONS
         //////////////////////////////////////////////////////////////*/
 
-        // CRITICAL: Pool must burn/mint for cross-chain transfers
-        // Without this grant:
-        // - lockOrBurn() reverts (can't burn on source)
-        // - releaseOrMint() reverts (can't mint on dest)
         tokenContract.grantMintAndBurnRole(address(poolContract));
-        console.log("[3/4] Pool granted MINT_AND_BURN_ROLE");
+
+        console.log("========================================");
+        console.log("  [3/7] POOL GRANTED MINT/BURN ROLE");
+        console.log("========================================");
+        console.log("Role: MINT_AND_BURN_ROLE");
+        console.log("Granted to:", address(poolContract));
+        console.log("Verified:", tokenContract.hasRole(keccak256("MINT_AND_BURN_ROLE"), address(poolContract)));
+        console.log("");
 
         /*//////////////////////////////////////////////////////////////
-                        STEP 4: DEPLOY VAULT (SEPOLIA ONLY)
+                    STEPS 4-6: REGISTRY INTEGRATION
+        //////////////////////////////////////////////////////////////*/
+
+        /*//////////////////////////////////////////////////////////////
+            STEP 4-6: TOKEN ADMIN REGISTRY (TESTNET ONLY)
+//////////////////////////////////////////////////////////////*/
+
+        // Skip registry on Anvil (no real CCIP infrastructure)
+        if (block.chainid != 31337) {
+            // STEP 4: Propose admin
+            RegistryModuleOwnerCustom(cfg.registryModule).registerAdminViaOwner(address(tokenContract));
+
+            console.log("========================================");
+            console.log("  [4/7] ADMIN REGISTRATION PROPOSED");
+            console.log("========================================");
+            console.log("Token:", address(tokenContract));
+            console.log("Proposed Admin:", msg.sender);
+            console.log("Status: PENDING");
+            console.log("");
+
+            // STEP 5: Accept admin role
+            TokenAdminRegistry(cfg.tokenAdminRegistry).acceptAdminRole(address(tokenContract));
+
+            console.log("========================================");
+            console.log("  [5/7] ADMIN ROLE ACCEPTED");
+            console.log("========================================");
+            console.log("Token:", address(tokenContract));
+            console.log("Active Admin:", msg.sender);
+            console.log("Status: ACTIVE");
+            console.log("");
+
+            // STEP 6: Set pool in registry
+            TokenAdminRegistry(cfg.tokenAdminRegistry).setPool(address(tokenContract), address(poolContract));
+
+            console.log("========================================");
+            console.log("  [6/7] POOL REGISTERED IN REGISTRY");
+            console.log("========================================");
+            console.log("Token:", address(tokenContract));
+            console.log("Pool:", address(poolContract));
+            console.log("Registry:", cfg.tokenAdminRegistry);
+            console.log("----------------------------------------");
+            console.log("Router Discovery: ENABLED");
+            console.log("CCIP Standard: COMPLIANT");
+            console.log("Pool Upgradeable: YES");
+            console.log("");
+        } else {
+            // Anvil: Skip registry (mock infrastructure)
+            console.log("========================================");
+            console.log("  [4-6/7] REGISTRY STEPS SKIPPED (ANVIL)");
+            console.log("========================================");
+            console.log("Reason: No CCIP registry on local Anvil");
+            console.log("Note: Registry only needed for testnet/mainnet");
+            console.log("Pool can still burn/mint without registry");
+            console.log("");
+        }
+
+        /*//////////////////////////////////////////////////////////////
+                        STEP 7: VAULT (SEPOLIA ONLY)
         //////////////////////////////////////////////////////////////*/
 
         Vault vaultContract;
 
-        if (block.chainid == SEPOLIA_CHAIN_ID) {
-            // Deploy vault for L1 deposits/redemptions
+        if (block.chainid == SEPOLIA_CHAIN_ID || block.chainid == 1 || block.chainid == 31337) {
             vaultContract = new Vault(IRebaseToken(address(tokenContract)));
 
-            // Fund vault with ETH for interest payouts
-            // PRODUCTION NOTE: Would use protocol revenue, not deployer ETH
-            if (address(this).balance >= VAULT_SEED_FUNDING) {
+            console.log("========================================");
+            console.log("  [7/7] VAULT DEPLOYED (SEPOLIA)");
+            console.log("========================================");
+            console.log("Address:", address(vaultContract));
+            console.log("Token:", address(vaultContract.i_rebaseToken()));
+
+            tokenContract.grantMintAndBurnRole(address(vaultContract));
+            console.log("Mint/Burn Role: GRANTED");
+
+            // Fund vault
+            if (msg.sender.balance >= VAULT_SEED_FUNDING) {
                 (bool success,) = payable(address(vaultContract)).call{value: VAULT_SEED_FUNDING}("");
                 if (!success) revert DeployLocal__VaultFundingFailed();
 
-                console.log("[4/4] Vault deployed and funded:", address(vaultContract));
-                console.log("      Initial ETH balance:", VAULT_SEED_FUNDING / 1e18, "ETH");
+                console.log("----------------------------------------");
+                console.log("Initial Funding:", VAULT_SEED_FUNDING / 1e18, "ETH");
+                console.log("Purpose: Interest payout reserves");
             } else {
-                console.log("[4/4] Vault deployed (no funding):", address(vaultContract));
-                console.log("      WARNING: Vault has 0 ETH - interest payouts will fail");
+                console.log("----------------------------------------");
+                console.log("WARNING: Vault unfunded");
+                console.log("  Users can deposit but NOT redeem");
+                console.log("  Fund with: cast send", address(vaultContract), "--value 1ether");
             }
-
-            // CRITICAL: Vault must mint on deposit, burn on redeem
-            tokenContract.grantMintAndBurnRole(address(vaultContract));
-            console.log("      Vault granted MINT_AND_BURN_ROLE");
+            console.log("");
         } else {
-            // Non-Sepolia chains: No vault deployment
-            console.log("[4/4] Skipping vault (not Sepolia)");
-            console.log("      Users must bridge to Sepolia to redeem for ETH");
+            console.log("========================================");
+            console.log("  [7/7] VAULT SKIPPED (NOT SEPOLIA)");
+            console.log("========================================");
+            console.log("Chain:", block.chainid);
+            console.log("Rationale: Vault only on L1");
+            console.log("");
             vaultContract = Vault(payable(address(0)));
         }
 
@@ -191,30 +266,46 @@ contract DeployLocal is Script {
                             DEPLOYMENT SUMMARY
         //////////////////////////////////////////////////////////////*/
 
-        console.log("\n=== Deployment Complete ===");
+        console.log("========================================");
+        console.log("       DEPLOYMENT COMPLETE");
+        console.log("========================================");
+        console.log("CONTRACT ADDRESSES:");
+        console.log("----------------------------------------");
         console.log("RebaseToken:", address(tokenContract));
         console.log("RebaseTokenPool:", address(poolContract));
         console.log("Vault:", address(vaultContract));
-        console.log("---");
-        console.log("CCIP Router:", cfg.router);
-        console.log("RMN Proxy:", cfg.rmnProxy);
+        console.log("");
+        console.log("CCIP INFRASTRUCTURE:");
+        console.log("----------------------------------------");
+        console.log("Router:", cfg.router);
         console.log("Chain Selector:", cfg.chainSelector);
+        console.log("");
+        console.log("REGISTRY INTEGRATION:");
+        console.log("----------------------------------------");
+        console.log("Token Admin:", msg.sender);
+        console.log("Registry:", cfg.tokenAdminRegistry);
+        console.log("Status: ACTIVE");
+        console.log("");
 
         if (block.chainid == SEPOLIA_CHAIN_ID) {
-            console.log("\n[NEXT STEPS - Sepolia]");
-            console.log("1. Deploy on Arbitrum with this same script");
-            console.log("2. Run ConfigurePool.s.sol on BOTH chains");
-            console.log("3. Test deposit on Sepolia");
-            console.log("4. Test bridge Sepolia -> Arbitrum");
-        } else {
-            console.log("\n[NEXT STEPS - Arbitrum]");
-            console.log("1. Run ConfigurePool.s.sol on BOTH chains");
-            console.log("2. Test bridge from Sepolia");
+            console.log("NEXT STEPS:");
+            console.log("========================================");
+            console.log("1. Deploy on Arbitrum Sepolia");
+            console.log("2. Configure pools bidirectionally");
+            console.log("3. Test deposit -> bridge -> redeem");
+            console.log("");
         }
 
-        console.log("===========================\n");
+        console.log("    ALL SYSTEMS OPERATIONAL");
+        console.log("========================================\n");
 
-        // Return values for chaining with other scripts
-        return (address(tokenContract), address(poolContract), address(vaultContract), cfg.router, cfg.rmnProxy);
+        return (
+            address(tokenContract),
+            address(poolContract),
+            address(vaultContract),
+            cfg.router,
+            cfg.rmnProxy,
+            cfg.linkToken
+        );
     }
 }

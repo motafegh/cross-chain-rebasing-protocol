@@ -27,7 +27,7 @@ import {IERC20} from "@ccip/contracts/src/v0.8/vendor/openzeppelin-solidity/v4.8
  * - No reentrancy risk (all scripts are read-only or single-call)
  *
  * GAS COSTS (approximate, Sepolia):
- * - Deposit:  ~120k gas (~$3-5 @ 30 gwei)
+ * - Deposit:  ~120k gas (~$3-5 at 30 gwei)
  * - Redeem:   ~95k gas (~$2-4)
  * - Bridge:   ~180k gas + CCIP relay fees (~$0.50-2.00 in LINK)
  *
@@ -305,7 +305,11 @@ contract RedeemScript is InteractionBase {
      * @param amount Tokens to redeem (use type(uint256).max for full balance)
      * @dev Special handling for max uint to redeem full balance including interest
      */
-    function run(address vaultAddress, address tokenAddress, uint256 amount) external nonZeroAddress(vaultAddress) nonZeroAmount(amount) {
+    function run(address vaultAddress, address tokenAddress, uint256 amount)
+        external
+        nonZeroAddress(vaultAddress)
+        nonZeroAmount(amount)
+    {
         // Load contracts
         Vault vault = Vault(payable(vaultAddress));
         RebaseToken token = RebaseToken(tokenAddress);
@@ -406,7 +410,7 @@ contract RedeemScript is InteractionBase {
  * - User can track message via CCIP Explorer
  *
  * COST BREAKDOWN:
- * - Source chain gas: ~180k gas (~$4-6 @ 30 gwei)
+ * - Source chain gas: ~180k gas (~$4-6 at 30 gwei)
  * - CCIP relay fee: ~0.5-2 LINK (~$5-20 depending on chain)
  * - Destination gas: Paid by CCIP relayers (included in fee)
  * Total: ~$10-25 per bridge for security guarantees
